@@ -233,7 +233,7 @@ export function RuntimesPage({
             actions={
               selectedMachine?.isCurrent ? localMachineActions : undefined
             }
-            onRename={(label) => selectedMachine && handleRenameMachine(selectedMachine, label)}
+            onRename={(label) => { if (selectedMachine) handleRenameMachine(selectedMachine, label); }}
           />
         </div>
       ) : (
@@ -274,7 +274,7 @@ export function RuntimesPage({
                 actions={
                   selectedMachine?.isCurrent ? localMachineActions : undefined
                 }
-                onRename={(label) => selectedMachine && handleRenameMachine(selectedMachine, label)}
+                onRename={(label) => { if (selectedMachine) handleRenameMachine(selectedMachine, label); }}
               />
             </ResizablePanel>
           </ResizablePanelGroup>
