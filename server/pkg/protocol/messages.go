@@ -143,6 +143,8 @@ type DaemonHeartbeatAckPayload struct {
 	// that don't know this field silently ignore it (standard JSON behavior)
 	// and fall back to the singular PendingLocalSkillImport above.
 	PendingLocalSkillImports []DaemonHeartbeatPendingLocalSkillImport `json:"pending_local_skill_imports,omitempty"`
+	PendingConfigRead       *DaemonHeartbeatPendingConfigRead        `json:"pending_config_read,omitempty"`
+	PendingConfigWrite      *DaemonHeartbeatPendingConfigWrite       `json:"pending_config_write,omitempty"`
 }
 
 // HeartbeatStatusRuntimeGone is the ack Status used when the runtime row no
@@ -173,4 +175,20 @@ type DaemonHeartbeatPendingLocalSkills struct {
 type DaemonHeartbeatPendingLocalSkillImport struct {
 	ID       string `json:"id"`
 	SkillKey string `json:"skill_key"`
+}
+
+// DaemonHeartbeatPendingConfigRead requests the daemon to read all config
+// types for a specific provider and report the raw file contents.
+type DaemonHeartbeatPendingConfigRead struct {
+	ID       string `json:"id"`
+	Provider string `json:"provider"`
+}
+
+// DaemonHeartbeatPendingConfigWrite requests the daemon to write modified
+// config files back to disk for a specific provider. Configs carries the
+// full ProviderConfigs serialised as JSON.
+type DaemonHeartbeatPendingConfigWrite struct {
+	ID       string          `json:"id"`
+	Provider string          `json:"provider"`
+	Configs  json.RawMessage `json:"configs"`
 }
