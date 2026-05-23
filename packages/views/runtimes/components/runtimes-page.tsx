@@ -653,6 +653,7 @@ function MachineDetail({
   now: number;
   bootstrapping?: boolean;
   actions?: React.ReactNode;
+  onRename: (label: string) => void;
 }) {
   const { t } = useT("runtimes");
   const healthLabel = useHealthLabel();
