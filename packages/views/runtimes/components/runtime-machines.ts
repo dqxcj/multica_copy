@@ -258,6 +258,10 @@ function machineTitle(
   const first = runtimes[0];
   if (!first) return "Unknown machine";
 
+  // Use user-set label if any runtime on this machine has one.
+  const labeled = runtimes.find((rt) => rt.label);
+  if (labeled?.label) return labeled.label;
+
   const deviceName = runtimeDeviceName(first);
   if (deviceName) return deviceName;
 

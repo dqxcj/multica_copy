@@ -26,6 +26,8 @@ export interface RuntimeDevice {
   owner_id: string | null;
   /** Defaults to "private" when the backend predates the visibility flag. */
   visibility: RuntimeVisibility;
+  /** User-settable display label. */
+  label: string;
   last_seen_at: string | null;
   created_at: string;
   updated_at: string;

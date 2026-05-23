@@ -33,6 +33,7 @@ type AgentRuntimeResponse struct {
 	// can bind agents) or "public" (any workspace member can). See migration
 	// 083 and canUseRuntimeForAgent.
 	Visibility string  `json:"visibility"`
+	Label      string  `json:"label"`
 	LastSeenAt *string `json:"last_seen_at"`
 	CreatedAt  string  `json:"created_at"`
 	UpdatedAt  string  `json:"updated_at"`
@@ -60,6 +61,7 @@ func runtimeToResponse(rt db.AgentRuntime) AgentRuntimeResponse {
 		Metadata:     metadata,
 		OwnerID:      uuidToPtr(rt.OwnerID),
 		Visibility:   rt.Visibility,
+		Label:        rt.Label,
 		LastSeenAt:   timestampToPtr(rt.LastSeenAt),
 		CreatedAt:    timestampToString(rt.CreatedAt),
 		UpdatedAt:    timestampToString(rt.UpdatedAt),
@@ -399,6 +401,8 @@ type UpdateAgentRuntimeRequest struct {
 	// or workspace admins can bind agents) and "public" (any workspace
 	// member can). Owner / workspace admin only, gated by canEditRuntime.
 	Visibility *string `json:"visibility,omitempty"`
+	// Label is a user-settable display name for the runtime machine.
+	Label *string `json:"label,omitempty"`
 }
 
 // UpdateAgentRuntime handles PATCH /api/runtimes/:id. Currently visibility
@@ -447,6 +451,24 @@ func (h *Handler) UpdateAgentRuntime(w http.ResponseWriter, r *http.Request) {
 			newVisibility = v
 			needVisibility = true
 		}
+	}
+
+	var needLabel bool
+	if req.Label != nil && *req.Label != rt.Label {
+		needLabel = true
+	}
+
+	if needLabel {
+		updated, err := h.Queries.UpdateAgentRuntimeLabel(r.Context(), db.UpdateAgentRuntimeLabelParams{
+			Label: *req.Label,
+			ID:    runtimeUUID,
+		})
+		if err != nil {
+			slog.Error("UpdateAgentRuntimeLabel failed", "error", err, "runtime_id", runtimeID)
+			writeError(w, http.StatusInternalServerError, "failed to update runtime label")
+			return
+		}
+		rt = updated
 	}
 
 	if needVisibility {
