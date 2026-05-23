@@ -5,6 +5,7 @@ import { useDefaultLayout } from "react-resizable-panels";
 import {
   Cloud,
   Monitor,
+  Pencil,
   Plus,
   Search,
   Server,
@@ -15,6 +16,7 @@ import { useWorkspaceId } from "@multica/core/hooks";
 import { agentTaskSnapshotOptions } from "@multica/core/agents";
 import { runtimeListOptions, runtimeKeys } from "@multica/core/runtimes/queries";
 import { useUpdatableRuntimeIds } from "@multica/core/runtimes/hooks";
+import { useUpdateRuntime } from "@multica/core/runtimes/mutations";
 import { useWSEvent } from "@multica/core/realtime";
 import { agentListOptions } from "@multica/core/workspace/queries";
 import { Button } from "@multica/ui/components/ui/button";
@@ -92,6 +94,16 @@ export function RuntimesPage({
   const isLoading = useAuthStore((s) => s.isLoading);
   const wsId = useWorkspaceId();
   const qc = useQueryClient();
+  const updateRuntime = useUpdateRuntime(wsId);
+
+  const handleRenameMachine = useCallback(
+    (machine: RuntimeMachine, label: string) => {
+      const first = machine.runtimes[0];
+      if (!first) return;
+      updateRuntime.mutate({ runtimeId: first.id, patch: { label } });
+    },
+    [updateRuntime],
+  );
   const [machineFilter, setMachineFilter] =
     useState<RuntimeMachineFilter>("all");
   const [machineSearch, setMachineSearch] = useState("");
@@ -221,6 +233,7 @@ export function RuntimesPage({
             actions={
               selectedMachine?.isCurrent ? localMachineActions : undefined
             }
+            onRename={(label) => selectedMachine && handleRenameMachine(selectedMachine, label)}
           />
         </div>
       ) : (
@@ -261,6 +274,7 @@ export function RuntimesPage({
                 actions={
                   selectedMachine?.isCurrent ? localMachineActions : undefined
                 }
+                onRename={(label) => selectedMachine && handleRenameMachine(selectedMachine, label)}
               />
             </ResizablePanel>
           </ResizablePanelGroup>
@@ -565,12 +579,74 @@ function ProviderIconStack({ providers }: { providers: string[] }) {
   );
 }
 
+function EditableMachineTitle({
+  title,
+  machine,
+  onRename,
+}: {
+  title: string;
+  machine: RuntimeMachine;
+  onRename: (label: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(title);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (editing) inputRef.current?.focus();
+  }, [editing]);
+
+  const commit = () => {
+    const trimmed = value.trim();
+    if (trimmed && trimmed !== title) {
+      onRename(trimmed);
+    } else {
+      setValue(title);
+    }
+    setEditing(false);
+  };
+
+  if (!editing) {
+    return (
+      <span className="inline-flex min-w-0 items-center gap-1 group/title">
+        <span className="truncate">{title}</span>
+        <button
+          type="button"
+          className="shrink-0 rounded p-0.5 opacity-0 group-hover/title:opacity-100 hover:bg-accent transition-opacity"
+          onClick={() => {
+            setValue(title);
+            setEditing(true);
+          }}
+        >
+          <Pencil className="h-3 w-3 text-muted-foreground" />
+        </button>
+      </span>
+    );
+  }
+
+  return (
+    <input
+      ref={inputRef}
+      type="text"
+      value={value}
+      className="h-6 w-full min-w-[120px] rounded border bg-background px-1 text-sm font-medium outline-none ring-1 ring-primary"
+      onChange={(e) => setValue(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") commit();
+        if (e.key === "Escape") { setValue(title); setEditing(false); }
+      }}
+    />
+  );
+}
+
 function MachineDetail({
   machine,
   updatableIds,
   now,
   bootstrapping,
   actions,
+  onRename,
 }: {
   machine: RuntimeMachine | null;
   updatableIds: Set<string>;
@@ -653,8 +729,12 @@ function MachineDetail({
         <div className="flex min-w-0 flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
             <div className="flex min-w-0 flex-wrap items-center gap-2">
-              <h2 className="truncate text-xl font-semibold tracking-tight">
-                {machine.title}
+              <h2 className="text-xl font-semibold tracking-tight">
+                <EditableMachineTitle
+                  title={machine.title}
+                  machine={machine}
+                  onRename={onRename}
+                />
               </h2>
               <span className="inline-flex items-center gap-1 rounded-md border bg-background px-2 py-0.5 text-xs text-muted-foreground">
                 <HealthIcon health={machine.health} />
