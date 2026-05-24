@@ -126,6 +126,10 @@ func readCodexConfig() (*ProviderConfigs, error) {
 		return nil, fmt.Errorf("resolve home dir: %w", err)
 	}
 
+	// NOTE: this CODEX_HOME resolution duplicates the same logic inside
+	// localSkillRootForProvider("codex") in local_skills.go. Extracting a
+	// shared helper would require restructuring local_skills.go, so the
+	// duplication is accepted for now — it is only ~3 lines.
 	codexHome := strings.TrimSpace(os.Getenv("CODEX_HOME"))
 	if codexHome == "" {
 		codexHome = filepath.Join(home, ".codex")
@@ -267,8 +271,10 @@ func readHermesConfig() (*ProviderConfigs, error) {
 	cfg.Version = getToolVersion("hermes")
 
 	// Skills: ~/.hermes/skills/<name>/SKILL.md
-	skillRoot := filepath.Join(configDir, "skills")
-	cfg.Skills = readSkillFiles(skillRoot, "markdown")
+	skillRoot, _, _ := localSkillRootForProvider("hermes")
+	if skillRoot != "" {
+		cfg.Skills = readSkillFiles(skillRoot, "markdown")
+	}
 
 	// MCP + Permissions: ~/.hermes/config.yaml
 	configYAML := filepath.Join(configDir, "config.yaml")
