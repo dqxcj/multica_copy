@@ -429,14 +429,20 @@ func (h *Handler) persistAndParseConfigs(ctx context.Context, runtimeID string, 
 			continue
 		}
 
-		// Stub: store raw content as unified_schema for now.
-		// TODO: Replace with actual LLM parsing.
+		// Parse raw config into unified schema via the format-aware parser.
+		rawFiles := configTypeFiles(configs, ct)
+		unified := parseUnifiedConfig(ct, configs.Provider, rawFiles)
+		if unified == nil {
+			// Fallback: wrap raw content (e.g. markdown) as JSON.
+			unified = rawJSON
+		}
+
 		_, err = h.Queries.UpsertRuntimeConfigParsed(ctx, db.UpsertRuntimeConfigParsedParams{
 			RuntimeID:     runtimeUUID,
 			ConfigType:    string(ct),
-			UnifiedSchema: rawJSON,
+			UnifiedSchema: unified,
 			SnapshotID:    snap.ID,
-			ParsedBy:      "stub",
+			ParsedBy:      "parser-v1",
 			SchemaVersion: 1,
 			UnknownKeys:   nil,
 			Warnings:      nil,

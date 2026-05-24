@@ -35,6 +35,33 @@ type ConfigSchemaUnified struct {
 	Warnings    []string        `json:"warnings,omitempty"`
 }
 
+// configTypeFiles returns the raw ConfigFile slice for a given ConfigType.
+func configTypeFiles(configs *daemon.ProviderConfigs, ct ConfigType) []daemon.ConfigFile {
+	switch ct {
+	case ConfigTypeSkills:
+		return configs.Skills
+	case ConfigTypeMCP:
+		if configs.MCP != nil {
+			return []daemon.ConfigFile{*configs.MCP}
+		}
+	case ConfigTypeHooks:
+		if configs.Hooks != nil {
+			return []daemon.ConfigFile{*configs.Hooks}
+		}
+	case ConfigTypePermissions:
+		if configs.Permissions != nil {
+			return []daemon.ConfigFile{*configs.Permissions}
+		}
+	case ConfigTypeMemory:
+		return configs.Memory
+	case ConfigTypeRules:
+		return configs.Rules
+	case ConfigTypeInstructions:
+		return configs.Instructions
+	}
+	return nil
+}
+
 // configTypeRaw extracts the raw config content for a given ConfigType
 // from the ProviderConfigs. For single-file types it returns the file
 // content directly; for multi-file types it concatenates all file contents
