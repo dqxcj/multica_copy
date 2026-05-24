@@ -141,11 +141,32 @@ func (h *Handler) GetRuntimeConfigs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if parsed == nil {
-		parsed = []db.RuntimeConfigParsed{}
+	// Convert []byte UnifiedSchema → json.RawMessage so it is not base64-encoded
+	// by Go's encoding/json.
+	type configResponse struct {
+		ID            string          `json:"id"`
+		RuntimeID     string          `json:"runtime_id"`
+		ConfigType    string          `json:"config_type"`
+		UnifiedSchema json.RawMessage `json:"unified_schema"`
+		SnapshotID    string          `json:"snapshot_id,omitempty"`
+		SchemaVersion int32           `json:"schema_version"`
+		UnknownKeys   []string        `json:"unknown_keys"`
+		Warnings      []string        `json:"warnings"`
+	}
+	out := make([]configResponse, 0, len(parsed))
+	for _, p := range parsed {
+		out = append(out, configResponse{
+			ID:            uuidToString(p.ID),
+			RuntimeID:     uuidToString(p.RuntimeID),
+			ConfigType:    p.ConfigType,
+			UnifiedSchema: json.RawMessage(p.UnifiedSchema),
+			SchemaVersion: p.SchemaVersion,
+			UnknownKeys:   p.UnknownKeys,
+			Warnings:      p.Warnings,
+		})
 	}
 
-	writeJSON(w, http.StatusOK, parsed)
+	writeJSON(w, http.StatusOK, out)
 }
 
 // InitiateConfigWrite creates a config write request for the daemon.
