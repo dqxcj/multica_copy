@@ -53,6 +53,9 @@ import type {
   RuntimeLocalSkillListRequest,
   CreateRuntimeLocalSkillImportRequest,
   RuntimeLocalSkillImportRequest,
+  RuntimeConfigReadRequest,
+  RuntimeConfigParsed,
+  ProviderConfigs,
   TimelineEntry,
   AssigneeFrequencyEntry,
   TaskMessagePayload,
@@ -1034,6 +1037,31 @@ export class ApiClient {
     requestId: string,
   ): Promise<RuntimeLocalSkillImportRequest> {
     return this.fetch(`/api/runtimes/${runtimeId}/local-skills/import/${requestId}`);
+  }
+
+  // Runtime config (provider-level configs for skills, MCP, hooks, etc.)
+
+  async initiateConfigRead(runtimeId: string, provider: string): Promise<RuntimeConfigReadRequest> {
+    return this.fetch(`/api/runtimes/${runtimeId}/config/read?provider=${encodeURIComponent(provider)}`, { method: "POST" });
+  }
+
+  async getConfigReadResult(runtimeId: string, requestId: string): Promise<RuntimeConfigReadRequest> {
+    return this.fetch(`/api/runtimes/${runtimeId}/config/read/${requestId}`);
+  }
+
+  async getRuntimeConfigs(runtimeId: string): Promise<RuntimeConfigParsed[]> {
+    return this.fetch(`/api/runtimes/${runtimeId}/config`);
+  }
+
+  async getRuntimeConfigDiff(runtimeId: string, otherRuntimeId: string): Promise<{ diffs: unknown[] }> {
+    return this.fetch(`/api/runtimes/${runtimeId}/config/diff?other_runtime_id=${encodeURIComponent(otherRuntimeId)}`);
+  }
+
+  async initiateConfigWrite(runtimeId: string, provider: string, configs: ProviderConfigs): Promise<{ id: string }> {
+    return this.fetch(`/api/runtimes/${runtimeId}/config`, {
+      method: "PUT",
+      body: JSON.stringify({ provider, configs }),
+    });
   }
 
   async listAgentTasks(agentId: string): Promise<AgentTask[]> {
