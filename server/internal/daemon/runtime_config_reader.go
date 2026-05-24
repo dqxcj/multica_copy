@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -56,7 +57,8 @@ func readClaudeConfig() (*ProviderConfigs, error) {
 		cfg.Skills = readSkillFiles(skillRoot, "markdown")
 	}
 
-	// MCP: ~/.claude/.mcp.json, fallback ~/.claude.json
+	// MCP: ~/.claude/.mcp.json (project-level) or mcpServers in settings.json.
+	// Do NOT fall back to ~/.claude.json — that is runtime state, not MCP config.
 	mcpPath := filepath.Join(configDir, ".mcp.json")
 	if fileExists(mcpPath) {
 		content, err := readFileContent(mcpPath)
@@ -67,32 +69,39 @@ func readClaudeConfig() (*ProviderConfigs, error) {
 				FileType: "json",
 			}
 		}
-	} else {
-		homeMCP := filepath.Join(home, ".claude.json")
-		if fileExists(homeMCP) {
-			content, err := readFileContent(homeMCP)
-			if err == nil {
-				cfg.MCP = &ConfigFile{
-					Path:     filepath.ToSlash(homeMCP),
-					Content:  content,
-					FileType: "json",
-				}
-			}
-		}
 	}
 
-	// Hooks + Permissions: both from ~/.claude/settings.json
+	// Hooks + Permissions + MCP servers: extract from ~/.claude/settings.json
 	settingsPath := filepath.Join(configDir, "settings.json")
 	if fileExists(settingsPath) {
 		content, err := readFileContent(settingsPath)
 		if err == nil {
-			cf := &ConfigFile{
-				Path:     filepath.ToSlash(settingsPath),
-				Content:  content,
-				FileType: "json",
+			// Extract hooks section (if present)
+			if hooksContent := extractJSONSection(content, "hooks"); hooksContent != "" {
+				cfg.Hooks = &ConfigFile{
+					Path:     filepath.ToSlash(settingsPath) + "#hooks",
+					Content:  hooksContent,
+					FileType: "json",
+				}
 			}
-			cfg.Hooks = cf
-			cfg.Permissions = cf
+			// Extract permissions section (if present)
+			if permContent := extractJSONSection(content, "permissions"); permContent != "" {
+				cfg.Permissions = &ConfigFile{
+					Path:     filepath.ToSlash(settingsPath) + "#permissions",
+					Content:  permContent,
+					FileType: "json",
+				}
+			}
+			// Extract mcpServers if no dedicated .mcp.json
+			if cfg.MCP == nil {
+				if mcpContent := extractJSONSection(content, "mcpServers"); mcpContent != "" {
+					cfg.MCP = &ConfigFile{
+						Path:     filepath.ToSlash(settingsPath) + "#mcpServers",
+						Content:  mcpContent,
+						FileType: "json",
+					}
+				}
+			}
 		}
 	}
 
@@ -542,6 +551,30 @@ func readFileContent(path string) (string, error) {
 		return "", err
 	}
 	return string(data), nil
+}
+
+// extractJSONSection parses raw as JSON, extracts the given keys into a new
+// object, and returns the result as indented JSON. Returns "" if raw is not
+// valid JSON or none of the keys exist.
+func extractJSONSection(raw string, keys ...string) string {
+	var src map[string]any
+	if err := json.Unmarshal([]byte(raw), &src); err != nil {
+		return ""
+	}
+	out := make(map[string]any)
+	for _, k := range keys {
+		if v, ok := src[k]; ok {
+			out[k] = v
+		}
+	}
+	if len(out) == 0 {
+		return ""
+	}
+	b, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 func fileExists(path string) bool {
