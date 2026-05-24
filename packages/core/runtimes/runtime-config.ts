@@ -1,6 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api";
-import { runtimeKeys } from "./queries";
 
 export const runtimeConfigKeys = {
   all: () => ["runtimes", "config"] as const,

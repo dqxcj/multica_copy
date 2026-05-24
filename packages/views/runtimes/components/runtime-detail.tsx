@@ -46,6 +46,7 @@ import { HealthBadge } from "./shared";
 import { ProviderLogo } from "./provider-logo";
 import { UpdateSection } from "./update-section";
 import { UsageSection } from "./usage-section";
+import { RuntimeConfigSection } from "./runtime-config-section";
 import { useT } from "../../i18n";
 
 function getCliVersion(metadata: Record<string, unknown>): string | null {
@@ -188,6 +189,10 @@ export function RuntimeDetail({ runtime }: { runtime: AgentRuntime }) {
               daemonShort={daemonShort}
             />
             <UsageSection runtime={runtime} />
+            <RuntimeConfigSection
+              runtimeId={runtime.id}
+              provider={runtime.provider}
+            />
           </div>
 
           {/* Right rail: serving agents + diagnostics */}
