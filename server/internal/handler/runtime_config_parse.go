@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	toml "github.com/pelletier/go-toml/v2"
+	yaml "gopkg.in/yaml.v3"
 
 	"github.com/multica-ai/multica/server/internal/daemon"
 )
@@ -163,6 +164,15 @@ func parseTOML(raw string) (map[string]any, error) {
 	var m map[string]any
 	if err := toml.Unmarshal([]byte(raw), &m); err != nil {
 		return nil, fmt.Errorf("invalid toml: %w", err)
+	}
+	return m, nil
+}
+
+// parseYAML extracts a YAML object into a generic map.
+func parseYAML(raw string) (map[string]any, error) {
+	var m map[string]any
+	if err := yaml.Unmarshal([]byte(raw), &m); err != nil {
+		return nil, fmt.Errorf("invalid yaml: %w", err)
 	}
 	return m, nil
 }
@@ -326,6 +336,8 @@ func parseUnifiedMCP(provider string, rawFiles []daemon.ConfigFile) json.RawMess
 		return parseClaudeMCP(raw)
 	case "codex":
 		return parseCodexMCP(raw)
+	case "hermes":
+		return parseHermesMCP(raw)
 	default:
 		return parseClaudeMCP(raw) // JSON fallback
 	}
@@ -470,6 +482,8 @@ func parseUnifiedHooks(provider string, rawFiles []daemon.ConfigFile) json.RawMe
 		return parseClaudeHooks(raw)
 	case "codex":
 		return parseCodexHooks(raw)
+	case "hermes":
+		return parseHermesHooks(raw)
 	default:
 		return nil
 	}
@@ -566,6 +580,8 @@ func parseUnifiedPermissions(provider string, rawFiles []daemon.ConfigFile) json
 		return parseClaudePermissions(raw)
 	case "codex":
 		return parseCodexPermissions(raw)
+	case "hermes":
+		return parseHermesPermissions(raw)
 	default:
 		return nil
 	}
@@ -718,6 +734,129 @@ func parseUnifiedInstructions(rawFiles []daemon.ConfigFile) json.RawMessage {
 
 func strContains(s, substr string) bool {
 	return indexOf(s, substr) >= 0
+}
+
+// ---------------------------------------------------------------------------
+// Hermes YAML parsers
+// ---------------------------------------------------------------------------
+
+func parseHermesMCP(raw string) json.RawMessage {
+	// Hermes MCP: config.yaml mcp_servers key
+	m, err := parseYAML(raw)
+	if err != nil {
+		return nil
+	}
+	servers := UnifiedMCP{}
+	mcpRaw, ok := m["mcp_servers"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	for name, v := range mcpRaw {
+		srv := UnifiedMCPServer{Name: name, Enabled: true}
+		if cfg, ok := v.(map[string]any); ok {
+			if cmd, ok := cfg["command"].(string); ok {
+				srv.Command = cmd
+				srv.Type = "stdio"
+			}
+			if url, ok := cfg["url"].(string); ok {
+				srv.URL = url
+				srv.Type = srvType(cfg)
+			}
+			if args, ok := cfg["args"].([]any); ok {
+				for _, a := range args {
+					if as, ok := a.(string); ok {
+						srv.Args = append(srv.Args, as)
+					}
+				}
+			}
+			if env, ok := cfg["env"].(map[string]any); ok {
+				srv.Env = make(map[string]string)
+				for ek, ev := range env {
+					if es, ok := ev.(string); ok {
+						srv.Env[ek] = es
+					}
+				}
+			}
+			if enabled, ok := cfg["enabled"].(bool); ok {
+				srv.Enabled = enabled
+			}
+		}
+		servers.Servers = append(servers.Servers, srv)
+	}
+	if len(servers.Servers) == 0 {
+		return nil
+	}
+	return marshalUnified(servers)
+}
+
+func srvType(cfg map[string]any) string {
+	if _, ok := cfg["command"]; ok {
+		return "stdio"
+	}
+	if _, ok := cfg["url"]; ok {
+		if ct, ok := cfg["connect_timeout"]; ok || ct != nil {
+			return "sse"
+		}
+		return "http"
+	}
+	return "stdio"
+}
+
+func parseHermesHooks(raw string) json.RawMessage {
+	m, err := parseYAML(raw)
+	if err != nil {
+		return nil
+	}
+	hooksRaw, ok := m["hooks"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	hooks := UnifiedHooks{}
+	for event, entries := range hooksRaw {
+		if arr, ok := entries.([]any); ok {
+			for _, entry := range arr {
+				if e, ok := entry.(map[string]any); ok {
+					matcher, _ := e["matcher"].(string)
+					cmd, _ := e["command"].(string)
+					hook := UnifiedHook{Event: event, Matcher: matcher, Command: cmd}
+					if t, ok := e["timeout"].(float64); ok {
+						hook.Timeout = int(t)
+					} else if t, ok := e["timeout"].(int); ok {
+						hook.Timeout = t
+					}
+					hooks.Hooks = append(hooks.Hooks, hook)
+				}
+			}
+		}
+	}
+	if len(hooks.Hooks) == 0 {
+		return nil
+	}
+	return marshalUnified(hooks)
+}
+
+func parseHermesPermissions(raw string) json.RawMessage {
+	m, err := parseYAML(raw)
+	if err != nil {
+		return nil
+	}
+	perms := UnifiedPermissions{}
+	if agent, ok := m["agent"].(map[string]any); ok {
+		if ap, ok := agent["approval_policy"].(string); ok {
+			perms.ApprovalPolicy = ap
+		}
+	}
+	if allow, ok := m["command_allowlist"].([]any); ok {
+		for _, a := range allow {
+			if as, ok := a.(string); ok {
+				perms.Rules = append(perms.Rules, UnifiedPermissionRule{Tool: as, Action: "allow"})
+			}
+		}
+	}
+	if len(perms.Rules) == 0 && perms.ApprovalPolicy == "" {
+		return nil
+	}
+	return marshalUnified(perms)
 }
 
 // ---------------------------------------------------------------------------
