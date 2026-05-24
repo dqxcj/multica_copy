@@ -1057,6 +1057,13 @@ export class ApiClient {
     return this.fetch(`/api/runtimes/${runtimeId}/config/diff?other_runtime_id=${encodeURIComponent(otherRuntimeId)}`);
   }
 
+  async initiateConfigMigration(runtimeId: string, sourceRuntimeId: string, configTypes: string[]): Promise<{ items: { config_type: string; native: string }[] }> {
+    return this.fetch(`/api/runtimes/${runtimeId}/config/migrate`, {
+      method: "POST",
+      body: JSON.stringify({ source_runtime_id: sourceRuntimeId, config_types: configTypes }),
+    });
+  }
+
   async initiateConfigWrite(runtimeId: string, provider: string, configs: ProviderConfigs): Promise<{ id: string }> {
     return this.fetch(`/api/runtimes/${runtimeId}/config`, {
       method: "PUT",
