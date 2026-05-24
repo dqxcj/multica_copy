@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	toml "github.com/pelletier/go-toml/v2"
 	yaml "gopkg.in/yaml.v3"
@@ -840,12 +841,39 @@ func parseHermesPermissions(raw string) json.RawMessage {
 	if err != nil {
 		return nil
 	}
+	// If the daemon already extracted the "agent" section, m IS the agent config.
+	// Otherwise look for "agent" key at the top level.
+	agent := m
+	if a, ok := m["agent"].(map[string]any); ok {
+		agent = a
+	}
 	perms := UnifiedPermissions{}
-	if agent, ok := m["agent"].(map[string]any); ok {
-		if ap, ok := agent["approval_policy"].(string); ok {
-			perms.ApprovalPolicy = ap
+	// Extract key agent fields
+	if toolsets, ok := agent["toolsets"].([]any); ok {
+		var names []string
+		for _, t := range toolsets {
+			if s, ok := t.(string); ok { names = append(names, s) }
+		}
+		if len(names) > 0 {
+			perms.Rules = append(perms.Rules, UnifiedPermissionRule{Tool: "toolsets", Pattern: strings.Join(names, ", "), Action: "allow"})
 		}
 	}
+	if maxTurns, ok := agent["max_turns"].(float64); ok {
+		perms.Rules = append(perms.Rules, UnifiedPermissionRule{
+			Tool: "max_turns", Pattern: fmt.Sprintf("%.0f", maxTurns), Action: "allow",
+		})
+	} else if maxTurns, ok := agent["max_turns"].(int); ok {
+		perms.Rules = append(perms.Rules, UnifiedPermissionRule{
+			Tool: "max_turns", Pattern: fmt.Sprintf("%d", maxTurns), Action: "allow",
+		})
+	}
+	if re, ok := agent["reasoning_effort"].(string); ok {
+		perms.ApprovalPolicy = fmt.Sprintf("reasoning: %s", re)
+	}
+	if ap, ok := agent["approval_policy"].(string); ok {
+		perms.ApprovalPolicy = ap
+	}
+	// command_allowlist may be at top level or inside agent
 	if allow, ok := m["command_allowlist"].([]any); ok {
 		for _, a := range allow {
 			if as, ok := a.(string); ok {

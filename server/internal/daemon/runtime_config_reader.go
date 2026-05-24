@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"encoding/json"
+	yaml "gopkg.in/yaml.v3"
 	"fmt"
 	"io/fs"
 	"os"
@@ -290,13 +291,13 @@ func readHermesConfig() (*ProviderConfigs, error) {
 	if fileExists(configYAML) {
 		content, err := readFileContent(configYAML)
 		if err == nil {
-			cf := &ConfigFile{
-				Path:     filepath.ToSlash(configYAML),
-				Content:  content,
-				FileType: "yaml",
+			basePath := filepath.ToSlash(configYAML)
+			if mcpSection := extractYAMLSection(content, "mcp_servers"); mcpSection != "" {
+				cfg.MCP = &ConfigFile{Path: basePath + "#mcp_servers", Content: mcpSection, FileType: "yaml"}
 			}
-			cfg.MCP = cf
-			cfg.Permissions = cf
+			if permSection := extractYAMLSection(content, "agent"); permSection != "" {
+				cfg.Permissions = &ConfigFile{Path: basePath + "#agent", Content: permSection, FileType: "yaml"}
+			}
 		}
 	}
 
@@ -551,6 +552,24 @@ func readFileContent(path string) (string, error) {
 		return "", err
 	}
 	return string(data), nil
+}
+
+
+// extractYAMLSection parses raw as YAML, extracts the given key, and returns
+// just that section as YAML. Returns "" if the key doesn't exist.
+func extractYAMLSection(raw string, key string) string {
+	var m map[string]any
+	if err := yaml.Unmarshal([]byte(raw), &m); err != nil {
+		return ""
+	}
+	if v, ok := m[key]; ok {
+		b, err := yaml.Marshal(v)
+		if err != nil {
+			return ""
+		}
+		return string(b)
+	}
+	return ""
 }
 
 // extractJSONSection parses raw as JSON, extracts the given keys into a new
