@@ -11,6 +11,6 @@ export function useRuntimeConfigs(runtimeId: string | undefined) {
   return useQuery({
     queryKey: runtimeConfigKeys.forRuntime(runtimeId!),
     queryFn: () => api.getRuntimeConfigs(runtimeId!),
-    enabled: !!runtimeId,
+    enabled: !!runtimeId && typeof window !== "undefined",
   });
 }

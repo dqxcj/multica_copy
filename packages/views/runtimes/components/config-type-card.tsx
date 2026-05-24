@@ -1,10 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronRight, AlertTriangle, Pencil } from "lucide-react";
-import type { RuntimeConfigParsed, RuntimeConfigType } from "@multica/core/types";
-import { Button } from "@multica/ui/components/ui/button";
-import { ConfigEditor } from "./config-editor";
+import { ChevronRight, AlertTriangle } from "lucide-react";
+// inline to avoid bundle issue
+type RuntimeConfigType = "skills" | "mcp" | "hooks" | "permissions" | "memory" | "rules" | "instructions";
+type RuntimeConfigParsed = { id: string; config_type: RuntimeConfigType; unified_schema: Record<string,unknown>; unknown_keys: string[] };
 
 const CONFIG_TYPE_LABELS: Record<RuntimeConfigType, string> = {
   skills: "Skills",
@@ -24,7 +24,7 @@ interface ConfigTypeCardProps {
 
 export function ConfigTypeCard({ config, runtimeId, provider }: ConfigTypeCardProps) {
   const [expanded, setExpanded] = useState(false);
-  const [editorOpen, setEditorOpen] = useState(false);
+  // TEMP: const [editorOpen, setEditorOpen] = useState(false);
 
   const label = CONFIG_TYPE_LABELS[config.config_type] ?? config.config_type;
   const itemCount = Object.keys(config.unified_schema).length;
@@ -54,7 +54,7 @@ export function ConfigTypeCard({ config, runtimeId, provider }: ConfigTypeCardPr
               {config.unknown_keys.length} unknown
             </span>
           )}
-          <div className="ml-auto">
+          {/* TEMP: <div className="ml-auto">
             <Button
               type="button"
               variant="ghost"
@@ -67,7 +67,7 @@ export function ConfigTypeCard({ config, runtimeId, provider }: ConfigTypeCardPr
             >
               <Pencil className="h-3 w-3" />
             </Button>
-          </div>
+          </div> */}
         </button>
 
         {/* Expanded content — scrollable pre */}
@@ -80,13 +80,14 @@ export function ConfigTypeCard({ config, runtimeId, provider }: ConfigTypeCardPr
         )}
       </div>
 
+{/* TEMP:
       <ConfigEditor
         open={editorOpen}
         onClose={() => setEditorOpen(false)}
         config={config}
         runtimeId={runtimeId}
         provider={provider}
-      />
+      /> */}
     </>
   );
 }

@@ -1,15 +1,8 @@
 "use client";
 
-import { useCallback, useState } from "react";
-import { FileText, RefreshCw } from "lucide-react";
-import { useQueryClient } from "@tanstack/react-query";
-import { api } from "@multica/core/api";
-import {
-  useRuntimeConfigs,
-  runtimeConfigKeys,
-} from "@multica/core/runtimes/runtime-config";
-import { Button } from "@multica/ui/components/ui/button";
-import { ConfigTypeCard } from "./config-type-card";
+import { useState } from "react";
+import { FileText, ChevronRight } from "lucide-react";
+import { useRuntimeConfigs } from "@multica/core/runtimes/runtime-config";
 
 interface RuntimeConfigSectionProps {
   runtimeId: string;
@@ -18,76 +11,44 @@ interface RuntimeConfigSectionProps {
 
 export function RuntimeConfigSection({
   runtimeId,
-  provider,
+  provider: _provider,
 }: RuntimeConfigSectionProps) {
-  const qc = useQueryClient();
-  const { data: configs = [], isLoading } = useRuntimeConfigs(runtimeId);
-  const [refreshing, setRefreshing] = useState(false);
-
-  const handleRefresh = useCallback(async () => {
-    setRefreshing(true);
-    try {
-      const { id } = await api.initiateConfigRead(runtimeId, provider);
-      // Poll every 2s until the daemon finishes reading.
-      while (true) {
-        await new Promise((r) => setTimeout(r, 2000));
-        const result = await api.getConfigReadResult(runtimeId, id);
-        if (result.status === "completed" || result.status === "failed") {
-          break;
-        }
-      }
-      await qc.invalidateQueries({
-        queryKey: runtimeConfigKeys.forRuntime(runtimeId),
-      });
-    } finally {
-      setRefreshing(false);
-    }
-  }, [runtimeId, provider, qc]);
+  const { data: configs = [] } = useRuntimeConfigs(runtimeId);
 
   return (
     <div className="space-y-3 rounded-lg border bg-card p-4">
-      {/* Header */}
       <div className="flex items-center justify-between">
         <h3 className="flex items-center gap-2 text-sm font-semibold">
           <FileText className="h-4 w-4 text-muted-foreground" />
           Agent Configs
         </h3>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={handleRefresh}
-          disabled={refreshing}
-        >
-          <RefreshCw
-            className={`h-3 w-3 ${refreshing ? "animate-spin" : ""}`}
-          />
-          Refresh
-        </Button>
       </div>
-
-      {/* Content */}
-      {isLoading ? (
-        <div className="py-4 text-center text-xs text-muted-foreground">
-          Loading configs...
-        </div>
-      ) : configs.length === 0 ? (
-        <div className="rounded-lg border border-dashed py-6 text-center">
-          <FileText className="mx-auto h-5 w-5 text-muted-foreground/40" />
-          <p className="mt-2 text-xs text-muted-foreground">
-            No config data yet. Click Refresh to fetch from daemon.
-          </p>
-        </div>
+      {configs.length === 0 ? (
+        <p className="text-xs text-muted-foreground">No config data yet.</p>
       ) : (
         <div className="space-y-2">
           {configs.map((config) => (
-            <ConfigTypeCard
-              key={config.id}
-              config={config}
-              runtimeId={runtimeId}
-              provider={provider}
-            />
+            <InlineCard key={config.id} config={config} />
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function InlineCard({ config }: { config: any }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div className="rounded-lg border bg-card">
+      <button type="button" onClick={() => setExpanded((v: boolean) => !v)}
+        className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm">
+        <ChevronRight className={`h-3.5 w-3.5 ${expanded ? "rotate-90" : ""}`} />
+        <span className="font-medium">{config.config_type}</span>
+        <span className="text-xs text-muted-foreground">{Object.keys(config.unified_schema).length}</span>
+      </button>
+      {expanded && (
+        <div className="max-h-80 overflow-auto border-t px-3 py-2">
+          <pre className="text-[11px]">{JSON.stringify(config.unified_schema, null, 2)}</pre>
         </div>
       )}
     </div>
