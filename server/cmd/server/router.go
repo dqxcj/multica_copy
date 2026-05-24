@@ -283,6 +283,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 		r.Post("/runtimes/{runtimeId}/local-skills/import/{requestId}/result", h.ReportLocalSkillImportResult)
 		r.Post("/runtimes/{runtimeId}/config-read/{requestId}/result", h.ReportConfigReadResult)
 		r.Post("/runtimes/{runtimeId}/config-write/{requestId}/result", h.ReportConfigWriteResult)
+		r.Post("/runtimes/{runtimeId}/config/restore", h.RestoreConfigBackup)
 
 		r.Get("/tasks/{taskId}/status", h.GetTaskStatus)
 		r.Post("/tasks/{taskId}/start", h.StartTask)
@@ -597,6 +598,7 @@ func NewRouterWithOptions(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus
 					r.Get("/config", h.GetRuntimeConfigs)
 					r.Put("/config", h.InitiateConfigWrite)
 					r.Get("/config/diff", h.GetRuntimeConfigDiff)
+					r.Post("/config/migrate", h.InitiateConfigMigration)
 					r.Delete("/", h.DeleteAgentRuntime)
 				})
 			})

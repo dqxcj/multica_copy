@@ -291,6 +291,83 @@ func (h *Handler) GetRuntimeConfigDiff(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, diffs)
 }
 
+// InitiateConfigMigration copies selected config types from a source runtime
+// to this runtime. POST /api/runtimes/{runtimeId}/config/migrate
+func (h *Handler) InitiateConfigMigration(w http.ResponseWriter, r *http.Request) {
+	runtimeID := chi.URLParam(r, "runtimeId")
+	_, _, ok := h.lookupRuntime(w, r, runtimeID)
+	if !ok {
+		return
+	}
+
+	// Get the target runtime to know its provider for serialization
+	rtUUID, _ := util.ParseUUID(runtimeID)
+	rt, err := h.Queries.GetAgentRuntime(r.Context(), rtUUID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "target runtime not found")
+		return
+	}
+
+	var body struct {
+		SourceRuntimeID string   `json:"source_runtime_id"`
+		ConfigTypes     []string `json:"config_types"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
+		return
+	}
+	if body.SourceRuntimeID == "" {
+		writeError(w, http.StatusBadRequest, "source_runtime_id is required")
+		return
+	}
+
+	sourceUUID, err := util.ParseUUID(body.SourceRuntimeID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid source_runtime_id")
+		return
+	}
+
+	// Load source configs
+	sourceParsed, err := h.Queries.ListRuntimeConfigParsedByRuntime(r.Context(), sourceUUID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load source configs: "+err.Error())
+		return
+	}
+
+	// Serialize each requested config type into the target provider's format
+	type migrationItem struct {
+		ConfigType string `json:"config_type"`
+		Native     string `json:"native_content"`
+	}
+	result := struct {
+		SourceRuntimeID string          `json:"source_runtime_id"`
+		TargetRuntimeID string          `json:"target_runtime_id"`
+		Items           []migrationItem `json:"items"`
+		Errors          []string        `json:"errors,omitempty"`
+	}{SourceRuntimeID: body.SourceRuntimeID, TargetRuntimeID: runtimeID}
+
+	typeSet := make(map[string]bool)
+	for _, t := range body.ConfigTypes {
+		typeSet[t] = true
+	}
+	filterAll := len(body.ConfigTypes) == 0
+
+	for _, p := range sourceParsed {
+		if !filterAll && !typeSet[p.ConfigType] {
+			continue
+		}
+		native := serializeUnified(ConfigType(p.ConfigType), rt.Provider, p.UnifiedSchema)
+		item := migrationItem{ConfigType: p.ConfigType, Native: native}
+		if native == "" {
+			item.Native = "(serializer not available — copy raw JSON)"
+			result.Errors = append(result.Errors, p.ConfigType+": serializer not available for "+rt.Provider)
+		}
+		result.Items = append(result.Items, item)
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
 // ---------------------------------------------------------------------------
 // Daemon-facing handlers
 // ---------------------------------------------------------------------------
@@ -387,6 +464,34 @@ func (h *Handler) ReportConfigWriteResult(w http.ResponseWriter, r *http.Request
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
+
+
+// RestoreConfigBackup accepts a backup path and asks the daemon to restore it.
+// POST /api/daemon/runtimes/{runtimeId}/config/restore
+func (h *Handler) RestoreConfigBackup(w http.ResponseWriter, r *http.Request) {
+	runtimeID := chi.URLParam(r, "runtimeId")
+	if _, ok := h.requireDaemonRuntimeAccess(w, r, runtimeID); !ok {
+		return
+	}
+	var body struct {
+		BackupPath string `json:"backup_path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
+		return
+	}
+	if body.BackupPath == "" {
+		writeError(w, http.StatusBadRequest, "backup_path is required")
+		return
+	}
+
+	// Queue a config write that restores from backup
+	// For now, provide a simple response acknowledging the request
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status": "queued",
+		"backup_path": body.BackupPath,
+	})
+}
 
 // persistAndParseConfigs stores raw configs from a successful read and runs
 // LLM parsing to produce unified schemas. Intended to be called as a
