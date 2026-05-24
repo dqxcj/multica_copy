@@ -411,11 +411,13 @@ func (h *Handler) persistAndParseConfigs(ctx context.Context, runtimeID string, 
 
 		hash := sha256Hex(raw)
 
+		rawJSON := sanitizeJSONB(raw)
+
 		snap, err := h.Queries.InsertRuntimeConfigSnapshot(ctx, db.InsertRuntimeConfigSnapshotParams{
 			RuntimeID:    runtimeUUID,
 			ConfigType:   string(ct),
 			Provider:     configs.Provider,
-			RawContent:   []byte(raw),
+			RawContent:   rawJSON,
 			ToolVersion:  toolVersion,
 			ContentHash:  hash,
 			Success:      true,
@@ -432,7 +434,7 @@ func (h *Handler) persistAndParseConfigs(ctx context.Context, runtimeID string, 
 		_, err = h.Queries.UpsertRuntimeConfigParsed(ctx, db.UpsertRuntimeConfigParsedParams{
 			RuntimeID:     runtimeUUID,
 			ConfigType:    string(ct),
-			UnifiedSchema: []byte(raw),
+			UnifiedSchema: rawJSON,
 			SnapshotID:    snap.ID,
 			ParsedBy:      "stub",
 			SchemaVersion: 1,
@@ -450,4 +452,16 @@ func (h *Handler) persistAndParseConfigs(ctx context.Context, runtimeID string, 
 func sha256Hex(s string) string {
 	h := sha256.Sum256([]byte(s))
 	return hex.EncodeToString(h[:])
+}
+
+// sanitizeJSONB returns a valid JSONB value for the raw content string.
+// If raw is already valid JSON, returns it as-is. Otherwise wraps it in a
+// JSON object with a "raw" key.
+func sanitizeJSONB(raw string) []byte {
+	if json.Valid([]byte(raw)) {
+		return []byte(raw)
+	}
+	// Escape for safe embedding in JSON string
+	escaped, _ := json.Marshal(raw)
+	return []byte(`{"raw":` + string(escaped) + `}`)
 }
