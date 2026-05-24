@@ -314,7 +314,7 @@ func (h *Handler) ReportConfigReadResult(w http.ResponseWriter, r *http.Request)
 
 		// Fire-and-forget: persist raw configs and parse with LLM.
 		if body.Configs != nil {
-			go h.persistAndParseConfigs(r.Context(), runtimeID, body.Configs)
+			go h.persistAndParseConfigs(context.Background(), runtimeID, body.Configs)
 		}
 	}
 
