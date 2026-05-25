@@ -49,6 +49,11 @@ export type {
   RuntimeLocalSkillsResult,
   RuntimeLocalSkillImportResult,
   IssueUsageSummary,
+  ProviderConfigs,
+  RuntimeConfigFile,
+  RuntimeConfigType,
+  RuntimeConfigReadRequest,
+  RuntimeConfigParsed,
 } from "./agent";
 export type { Workspace, WorkspaceRepo, Member, MemberRole, User, MemberWithUser, Invitation } from "./workspace";
 export type { InboxItem, InboxSeverity, InboxItemType } from "./inbox";

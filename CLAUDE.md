@@ -164,6 +164,20 @@ make setup-worktree     # Setup using .env.worktree
 make start-worktree     # Start using .env.worktree
 ```
 
+## Runtime Configuration Management
+
+Full config lifecycle (Skills, MCP, Hooks, Permissions, Memory, Rules, Instructions) for Claude Code, Codex, OpenCode, and Hermes runtimes. Supports visual management, diff comparison, and cross-machine migration.
+
+Architecture: Daemon reads config files on-demand → Server stores raw snapshots + LLM-parsed unified schema → Frontend displays in runtime detail page. Writes create `.bak.<timestamp>` backups.
+
+Key files:
+- `server/internal/daemon/runtime_config_reader.go` — Config file discovery (4 providers)
+- `server/internal/daemon/runtime_config_writer.go` — Write with backup
+- `server/internal/handler/runtime_config_api.go` — REST API (6 user + 2 daemon endpoints)
+- `server/internal/handler/runtime_config_store.go` — Pending request stores
+- `server/internal/handler/runtime_config_llm.go` — LLM parsing stubs
+- `packages/views/runtimes/components/runtime-config-section.tsx` — Frontend UI
+
 ## Coding Rules
 
 - TypeScript strict mode is enabled; keep types explicit.

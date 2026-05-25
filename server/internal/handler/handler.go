@@ -94,6 +94,8 @@ type Handler struct {
 	ModelListStore        ModelListStore
 	LocalSkillListStore   LocalSkillListStore
 	LocalSkillImportStore LocalSkillImportStore
+	ConfigReadStore       ConfigReadStore
+	ConfigWriteStore      ConfigWriteStore
 	LivenessStore         LivenessStore
 	HeartbeatScheduler    HeartbeatScheduler
 	Storage               storage.Storage
@@ -139,6 +141,8 @@ func New(queries *db.Queries, txStarter txStarter, hub *realtime.Hub, bus *event
 		ModelListStore:        NewInMemoryModelListStore(),
 		LocalSkillListStore:   NewInMemoryLocalSkillListStore(),
 		LocalSkillImportStore: NewInMemoryLocalSkillImportStore(),
+		ConfigReadStore:       NewInMemoryConfigReadStore(),
+		ConfigWriteStore:      NewInMemoryConfigWriteStore(),
 		LivenessStore:         NewNoopLivenessStore(),
 		HeartbeatScheduler:    NewPassthroughHeartbeatScheduler(queries),
 		Storage:               store,

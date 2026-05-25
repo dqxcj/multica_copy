@@ -53,6 +53,9 @@ apps/web/test-results/
 .claude/
 .tool-versions
 
+# git worktree isolation
+.worktrees/
+
 # feature tracking
 _features/
 

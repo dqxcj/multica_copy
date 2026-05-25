@@ -1280,13 +1280,15 @@ func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, r
 	if resp == nil {
 		return
 	}
-	if resp.PendingUpdate != nil || resp.PendingModelList != nil || resp.PendingLocalSkills != nil || resp.PendingLocalSkillImport != nil {
+	if resp.PendingUpdate != nil || resp.PendingModelList != nil || resp.PendingLocalSkills != nil || resp.PendingLocalSkillImport != nil || resp.PendingConfigRead != nil || resp.PendingConfigWrite != nil {
 		d.logger.Debug("heartbeat: pending actions",
 			"runtime_id", runtimeID,
 			"update", resp.PendingUpdate != nil,
 			"model_list", resp.PendingModelList != nil,
 			"local_skills", resp.PendingLocalSkills != nil,
 			"local_skill_import", resp.PendingLocalSkillImport != nil,
+			"config_read", resp.PendingConfigRead != nil,
+			"config_write", resp.PendingConfigWrite != nil,
 		)
 	}
 	if resp.PendingUpdate != nil {
@@ -1314,6 +1316,12 @@ func (d *Daemon) handleHeartbeatActions(ctx context.Context, runtimeID string, r
 			go d.handleLocalSkillImport(ctx, *rt, *resp.PendingLocalSkillImport)
 		}
 	}
+	if resp.PendingConfigRead != nil {
+		d.handleConfigRead(ctx, runtimeID, resp.PendingConfigRead)
+		}
+	if resp.PendingConfigWrite != nil {
+		d.handleConfigWrite(ctx, runtimeID, resp.PendingConfigWrite)
+		}
 }
 
 // handleModelList resolves the provider's supported models (via static
@@ -1436,6 +1444,36 @@ func (d *Daemon) handleLocalSkillImport(ctx context.Context, rt Runtime, pending
 		"status": "completed",
 		"skill":  skill,
 	})
+}
+
+// handleConfigRead processes a pending config read request.
+func (d *Daemon) handleConfigRead(ctx context.Context, runtimeID string, pending *PendingConfigRead) {
+	configs, err := ReadProviderConfigs(pending.Provider)
+	result := map[string]any{}
+	if err != nil {
+		result["error"] = err.Error()
+	} else {
+		result["configs"] = configs
+		result["supported"] = configs.Supported
+	}
+	if reportErr := d.client.ReportConfigReadResult(ctx, runtimeID, pending.ID, result); reportErr != nil {
+		slog.Error("report config read failed", "error", reportErr, "request_id", pending.ID)
+	}
+}
+
+// handleConfigWrite processes a pending config write request.
+func (d *Daemon) handleConfigWrite(ctx context.Context, runtimeID string, pending *PendingConfigWrite) {
+	var configs ProviderConfigs
+	if err := json.Unmarshal(pending.Configs, &configs); err != nil {
+		d.client.ReportConfigWriteResult(ctx, runtimeID, pending.ID, map[string]any{"error": err.Error()})
+		return
+	}
+	backups, err := WriteProviderConfigs(&configs)
+	result := map[string]any{"backups": backups}
+	if err != nil {
+		result["error"] = err.Error()
+	}
+	d.client.ReportConfigWriteResult(ctx, runtimeID, pending.ID, result)
 }
 
 // runtimeReportBackoffs defines the retry schedule for delivering any

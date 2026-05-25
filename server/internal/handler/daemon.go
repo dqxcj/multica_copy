@@ -987,6 +987,54 @@ func (h *Handler) processHeartbeat(ctx context.Context, rt db.AgentRuntime, supp
 		}
 	}
 
+	// Probe then claim the config-read queue.
+	probeConfigReadCtx, cancelProbeCR := context.WithTimeout(ctx, heartbeatHasPendingTimeout)
+	hasConfigRead, probeConfigReadErr := h.ConfigReadStore.HasPending(probeConfigReadCtx, runtimeID)
+	cancelProbeCR()
+	switch {
+	case probeConfigReadErr == nil && hasConfigRead:
+		pendingConfigRead, popErr := h.ConfigReadStore.PopPending(ctx, runtimeID)
+		if popErr != nil {
+			slog.Warn("config read PopPending failed", "error", popErr, "runtime_id", runtimeID)
+		} else if pendingConfigRead != nil {
+			ack.PendingConfigRead = &protocol.DaemonHeartbeatPendingConfigRead{
+				ID:       pendingConfigRead.ID,
+				Provider: pendingConfigRead.Provider,
+			}
+		}
+	case probeConfigReadErr != nil:
+		if errors.Is(probeConfigReadErr, context.DeadlineExceeded) || errors.Is(probeConfigReadErr, context.Canceled) {
+			slog.Warn("config read HasPending timed out", "runtime_id", runtimeID)
+		} else {
+			slog.Warn("config read HasPending failed", "error", probeConfigReadErr, "runtime_id", runtimeID)
+		}
+	}
+
+	// Probe then claim the config-write queue.
+	probeConfigWriteCtx, cancelProbeCW := context.WithTimeout(ctx, heartbeatHasPendingTimeout)
+	hasConfigWrite, probeConfigWriteErr := h.ConfigWriteStore.HasPending(probeConfigWriteCtx, runtimeID)
+	cancelProbeCW()
+	switch {
+	case probeConfigWriteErr == nil && hasConfigWrite:
+		pendingConfigWrite, popErr := h.ConfigWriteStore.PopPending(ctx, runtimeID)
+		if popErr != nil {
+			slog.Warn("config write PopPending failed", "error", popErr, "runtime_id", runtimeID)
+		} else if pendingConfigWrite != nil {
+			raw, _ := json.Marshal(pendingConfigWrite.Configs)
+			ack.PendingConfigWrite = &protocol.DaemonHeartbeatPendingConfigWrite{
+				ID:       pendingConfigWrite.ID,
+				Provider: pendingConfigWrite.Provider,
+				Configs:  raw,
+			}
+		}
+	case probeConfigWriteErr != nil:
+		if errors.Is(probeConfigWriteErr, context.DeadlineExceeded) || errors.Is(probeConfigWriteErr, context.Canceled) {
+			slog.Warn("config write HasPending timed out", "runtime_id", runtimeID)
+		} else {
+			slog.Warn("config write HasPending failed", "error", probeConfigWriteErr, "runtime_id", runtimeID)
+		}
+	}
+
 	return ack, m, nil
 }
 

@@ -22,7 +22,7 @@ export function useUpdateRuntime(wsId: string) {
       patch,
     }: {
       runtimeId: string;
-      patch: { visibility?: "private" | "public" };
+      patch: { visibility?: "private" | "public"; label?: string };
     }) => api.updateRuntime(runtimeId, patch),
     onSettled: () => {
       qc.invalidateQueries({ queryKey: runtimeKeys.all(wsId) });

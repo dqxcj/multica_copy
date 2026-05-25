@@ -154,6 +154,15 @@ CREATE EXTENSION IF NOT EXISTS vector;
 
 Set `DATABASE_URL` in your `.env` and remove the `postgres` service from the compose file.
 
+### Database Tables
+
+Key tables for the Runtime Configuration Management feature:
+
+- `runtime_config_snapshot` — Stores raw config file snapshots (JSON) collected by the daemon
+- `runtime_config_parsed` — Stores LLM-parsed unified schema derived from raw snapshots
+
+Both tables are managed automatically by the daemon and the server. No manual maintenance is required.
+
 ### Running Migrations Manually
 
 The Docker Compose setup runs migrations automatically. If you need to run them manually:

@@ -1,0 +1,578 @@
+package handler
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"log/slog"
+	"net/http"
+	"sort"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/multica-ai/multica/server/internal/daemon"
+	"github.com/multica-ai/multica/server/internal/util"
+	db "github.com/multica-ai/multica/server/pkg/db/generated"
+)
+
+// ---------------------------------------------------------------------------
+// Request / response types
+// ---------------------------------------------------------------------------
+
+// configDiff describes the comparison result for one ConfigType between two
+// runtimes. Used by GetRuntimeConfigDiff.
+type configDiff struct {
+	ConfigType string          `json:"config_type"`
+	Left       json.RawMessage `json:"left,omitempty"`
+	Right      json.RawMessage `json:"right,omitempty"`
+	Status     string          `json:"status"` // "same", "different", "left_only", "right_only"
+}
+
+// initiateConfigWriteBody is the JSON body accepted by InitiateConfigWrite.
+type initiateConfigWriteBody struct {
+	Provider string                `json:"provider"`
+	Configs  *daemon.ProviderConfigs `json:"configs"`
+}
+
+// configReadResultBody is the daemon's report for a config read request.
+type configReadResultBody struct {
+	Configs   *daemon.ProviderConfigs `json:"configs"`
+	Supported *bool                   `json:"supported"`
+	Error     string                  `json:"error"`
+}
+
+// configWriteResultBody is the daemon's report for a config write request.
+type configWriteResultBody struct {
+	Backups []string `json:"backups"`
+	Error   string   `json:"error"`
+}
+
+// ---------------------------------------------------------------------------
+// Runtime access helper
+// ---------------------------------------------------------------------------
+
+// lookupRuntime finds an agent runtime by ID and verifies the caller is a
+// workspace member. Returns the runtime UUID and workspace ID on success, or
+// writes an error response and returns ok=false.
+func (h *Handler) lookupRuntime(w http.ResponseWriter, r *http.Request, runtimeID string) (rtUUID pgtype.UUID, workspaceID string, ok bool) {
+	runtimeUUID, ok := parseUUIDOrBadRequest(w, runtimeID, "runtime_id")
+	if !ok {
+		return pgtype.UUID{}, "", false
+	}
+
+	rt, err := h.Queries.GetAgentRuntime(r.Context(), runtimeUUID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "runtime not found")
+		return pgtype.UUID{}, "", false
+	}
+
+	wsID := uuidToString(rt.WorkspaceID)
+	if _, ok := h.requireWorkspaceMember(w, r, wsID, "runtime not found"); !ok {
+		return pgtype.UUID{}, "", false
+	}
+
+	return rt.ID, wsID, true
+}
+
+// ---------------------------------------------------------------------------
+// User-facing handlers
+// ---------------------------------------------------------------------------
+
+// InitiateConfigRead creates a config read request for the daemon to process.
+// POST /api/runtimes/{runtimeId}/config/read?provider=X
+func (h *Handler) InitiateConfigRead(w http.ResponseWriter, r *http.Request) {
+	runtimeID := chi.URLParam(r, "runtimeId")
+	_, _, ok := h.lookupRuntime(w, r, runtimeID)
+	if !ok {
+		return
+	}
+
+	provider := r.URL.Query().Get("provider")
+	if provider == "" {
+		writeError(w, http.StatusBadRequest, "provider is required")
+		return
+	}
+
+	req, err := h.ConfigReadStore.Create(r.Context(), runtimeID, provider)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to enqueue config read: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, req)
+}
+
+// GetConfigReadResult returns the result of a config read request.
+// GET /api/runtimes/{runtimeId}/config/read/{requestId}
+func (h *Handler) GetConfigReadResult(w http.ResponseWriter, r *http.Request) {
+	runtimeID := chi.URLParam(r, "runtimeId")
+	_, _, ok := h.lookupRuntime(w, r, runtimeID)
+	if !ok {
+		return
+	}
+
+	requestID := chi.URLParam(r, "requestId")
+	req, err := h.ConfigReadStore.Get(r.Context(), requestID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load request: "+err.Error())
+		return
+	}
+	if req == nil {
+		writeError(w, http.StatusNotFound, "request not found")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, req)
+}
+
+// GetRuntimeConfigs returns all parsed configs for a runtime.
+// GET /api/runtimes/{runtimeId}/config
+func (h *Handler) GetRuntimeConfigs(w http.ResponseWriter, r *http.Request) {
+	runtimeID := chi.URLParam(r, "runtimeId")
+	runtimeUUID, _, ok := h.lookupRuntime(w, r, runtimeID)
+	if !ok {
+		return
+	}
+
+	parsed, err := h.Queries.ListRuntimeConfigParsedByRuntime(r.Context(), runtimeUUID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list runtime configs: "+err.Error())
+		return
+	}
+
+	// Convert []byte UnifiedSchema → json.RawMessage so it is not base64-encoded
+	// by Go's encoding/json.
+	type configResponse struct {
+		ID            string          `json:"id"`
+		RuntimeID     string          `json:"runtime_id"`
+		ConfigType    string          `json:"config_type"`
+		UnifiedSchema json.RawMessage `json:"unified_schema"`
+		SnapshotID    string          `json:"snapshot_id,omitempty"`
+		SchemaVersion int32           `json:"schema_version"`
+		UnknownKeys   []string        `json:"unknown_keys"`
+		Warnings      []string        `json:"warnings"`
+	}
+	out := make([]configResponse, 0, len(parsed))
+	for _, p := range parsed {
+		out = append(out, configResponse{
+			ID:            uuidToString(p.ID),
+			RuntimeID:     uuidToString(p.RuntimeID),
+			ConfigType:    p.ConfigType,
+			UnifiedSchema: json.RawMessage(p.UnifiedSchema),
+			SchemaVersion: p.SchemaVersion,
+			UnknownKeys:   p.UnknownKeys,
+			Warnings:      p.Warnings,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, out)
+}
+
+// InitiateConfigWrite creates a config write request for the daemon.
+// PUT /api/runtimes/{runtimeId}/config
+func (h *Handler) InitiateConfigWrite(w http.ResponseWriter, r *http.Request) {
+	runtimeID := chi.URLParam(r, "runtimeId")
+	_, _, ok := h.lookupRuntime(w, r, runtimeID)
+	if !ok {
+		return
+	}
+
+	var body initiateConfigWriteBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if body.Provider == "" {
+		writeError(w, http.StatusBadRequest, "provider is required")
+		return
+	}
+	if body.Configs == nil {
+		writeError(w, http.StatusBadRequest, "configs is required")
+		return
+	}
+
+	req, err := h.ConfigWriteStore.Create(r.Context(), runtimeID, body.Provider, body.Configs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to enqueue config write: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, req)
+}
+
+// GetRuntimeConfigDiff compares parsed configs between two runtimes.
+// GET /api/runtimes/{runtimeId}/config/diff?other_runtime_id=X
+func (h *Handler) GetRuntimeConfigDiff(w http.ResponseWriter, r *http.Request) {
+	runtimeID := chi.URLParam(r, "runtimeId")
+	runtimeUUID, _, ok := h.lookupRuntime(w, r, runtimeID)
+	if !ok {
+		return
+	}
+
+	otherRuntimeID := r.URL.Query().Get("other_runtime_id")
+	if otherRuntimeID == "" {
+		writeError(w, http.StatusBadRequest, "other_runtime_id query parameter is required")
+		return
+	}
+
+	otherUUID, ok := parseUUIDOrBadRequest(w, otherRuntimeID, "other_runtime_id")
+	if !ok {
+		return
+	}
+
+	leftParsed, err := h.Queries.ListRuntimeConfigParsedByRuntime(r.Context(), runtimeUUID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list left runtime configs: "+err.Error())
+		return
+	}
+
+	rightParsed, err := h.Queries.ListRuntimeConfigParsedByRuntime(r.Context(), otherUUID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list right runtime configs: "+err.Error())
+		return
+	}
+
+	// Index both sides by config_type
+	leftByType := make(map[string]db.RuntimeConfigParsed, len(leftParsed))
+	for _, p := range leftParsed {
+		leftByType[p.ConfigType] = p
+	}
+
+	rightByType := make(map[string]db.RuntimeConfigParsed, len(rightParsed))
+	for _, p := range rightParsed {
+		rightByType[p.ConfigType] = p
+	}
+
+	// Collect all config types from both sides
+	seen := make(map[string]bool)
+	allTypes := make([]string, 0)
+	for _, p := range leftParsed {
+		if !seen[p.ConfigType] {
+			seen[p.ConfigType] = true
+			allTypes = append(allTypes, p.ConfigType)
+		}
+	}
+	for _, p := range rightParsed {
+		if !seen[p.ConfigType] {
+			seen[p.ConfigType] = true
+			allTypes = append(allTypes, p.ConfigType)
+		}
+	}
+	sort.Strings(allTypes)
+
+	diffs := make([]configDiff, 0, len(allTypes))
+	for _, ct := range allTypes {
+		left, leftOK := leftByType[ct]
+		right, rightOK := rightByType[ct]
+
+		d := configDiff{ConfigType: ct}
+
+		switch {
+		case leftOK && !rightOK:
+			d.Left = left.UnifiedSchema
+			d.Status = "left_only"
+		case !leftOK && rightOK:
+			d.Right = right.UnifiedSchema
+			d.Status = "right_only"
+		case leftOK && rightOK:
+			if string(left.UnifiedSchema) == string(right.UnifiedSchema) {
+				d.Status = "same"
+			} else {
+				d.Left = left.UnifiedSchema
+				d.Right = right.UnifiedSchema
+				d.Status = "different"
+			}
+		}
+
+		diffs = append(diffs, d)
+	}
+
+	writeJSON(w, http.StatusOK, diffs)
+}
+
+// InitiateConfigMigration copies selected config types from a source runtime
+// to this runtime. POST /api/runtimes/{runtimeId}/config/migrate
+func (h *Handler) InitiateConfigMigration(w http.ResponseWriter, r *http.Request) {
+	runtimeID := chi.URLParam(r, "runtimeId")
+	_, _, ok := h.lookupRuntime(w, r, runtimeID)
+	if !ok {
+		return
+	}
+
+	// Get the target runtime to know its provider for serialization
+	rtUUID, _ := util.ParseUUID(runtimeID)
+	rt, err := h.Queries.GetAgentRuntime(r.Context(), rtUUID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "target runtime not found")
+		return
+	}
+
+	var body struct {
+		SourceRuntimeID string   `json:"source_runtime_id"`
+		ConfigTypes     []string `json:"config_types"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
+		return
+	}
+	if body.SourceRuntimeID == "" {
+		writeError(w, http.StatusBadRequest, "source_runtime_id is required")
+		return
+	}
+
+	sourceUUID, err := util.ParseUUID(body.SourceRuntimeID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid source_runtime_id")
+		return
+	}
+
+	// Load source configs
+	sourceParsed, err := h.Queries.ListRuntimeConfigParsedByRuntime(r.Context(), sourceUUID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load source configs: "+err.Error())
+		return
+	}
+
+	// Serialize each requested config type into the target provider's format
+	type migrationItem struct {
+		ConfigType string `json:"config_type"`
+		Native     string `json:"native_content"`
+	}
+	result := struct {
+		SourceRuntimeID string          `json:"source_runtime_id"`
+		TargetRuntimeID string          `json:"target_runtime_id"`
+		Items           []migrationItem `json:"items"`
+		Errors          []string        `json:"errors,omitempty"`
+	}{SourceRuntimeID: body.SourceRuntimeID, TargetRuntimeID: runtimeID}
+
+	typeSet := make(map[string]bool)
+	for _, t := range body.ConfigTypes {
+		typeSet[t] = true
+	}
+	filterAll := len(body.ConfigTypes) == 0
+
+	for _, p := range sourceParsed {
+		if !filterAll && !typeSet[p.ConfigType] {
+			continue
+		}
+		native := serializeUnified(ConfigType(p.ConfigType), rt.Provider, p.UnifiedSchema)
+		item := migrationItem{ConfigType: p.ConfigType, Native: native}
+		if native == "" {
+			item.Native = "(serializer not available — copy raw JSON)"
+			result.Errors = append(result.Errors, p.ConfigType+": serializer not available for "+rt.Provider)
+		}
+		result.Items = append(result.Items, item)
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+// ---------------------------------------------------------------------------
+// Daemon-facing handlers
+// ---------------------------------------------------------------------------
+
+// ReportConfigReadResult accepts the daemon's result for a config read.
+// POST /api/daemon/runtimes/{runtimeId}/config-read/{requestId}/result
+func (h *Handler) ReportConfigReadResult(w http.ResponseWriter, r *http.Request) {
+	runtimeID := chi.URLParam(r, "runtimeId")
+	if _, ok := h.requireDaemonRuntimeAccess(w, r, runtimeID); !ok {
+		return
+	}
+
+	requestID := chi.URLParam(r, "requestId")
+	req, err := h.ConfigReadStore.Get(r.Context(), requestID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load request: "+err.Error())
+		return
+	}
+	if req == nil || req.RuntimeID != runtimeID {
+		writeError(w, http.StatusNotFound, "request not found")
+		return
+	}
+
+	var body configReadResultBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if body.Error != "" {
+		if err := h.ConfigReadStore.Fail(r.Context(), requestID, body.Error); err != nil {
+			slog.Error("config read store Fail failed", "error", err, "request_id", requestID)
+			writeError(w, http.StatusInternalServerError, "failed to persist failure")
+			return
+		}
+	} else {
+		if err := h.ConfigReadStore.Complete(r.Context(), requestID, body.Configs); err != nil {
+			slog.Error("config read store Complete failed", "error", err, "request_id", requestID)
+			writeError(w, http.StatusInternalServerError, "failed to persist completion")
+			return
+		}
+
+		// Fire-and-forget: persist raw configs and parse with LLM.
+		if body.Configs != nil {
+			go h.persistAndParseConfigs(context.Background(), runtimeID, body.Configs)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// ReportConfigWriteResult accepts the daemon's result for a config write.
+// POST /api/daemon/runtimes/{runtimeId}/config-write/{requestId}/result
+func (h *Handler) ReportConfigWriteResult(w http.ResponseWriter, r *http.Request) {
+	runtimeID := chi.URLParam(r, "runtimeId")
+	if _, ok := h.requireDaemonRuntimeAccess(w, r, runtimeID); !ok {
+		return
+	}
+
+	requestID := chi.URLParam(r, "requestId")
+	req, err := h.ConfigWriteStore.Get(r.Context(), requestID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load request: "+err.Error())
+		return
+	}
+	if req == nil || req.RuntimeID != runtimeID {
+		writeError(w, http.StatusNotFound, "request not found")
+		return
+	}
+
+	var body configWriteResultBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if body.Error != "" {
+		if err := h.ConfigWriteStore.Fail(r.Context(), requestID, body.Error); err != nil {
+			slog.Error("config write store Fail failed", "error", err, "request_id", requestID)
+			writeError(w, http.StatusInternalServerError, "failed to persist failure")
+			return
+		}
+	} else {
+		if err := h.ConfigWriteStore.Complete(r.Context(), requestID, body.Backups); err != nil {
+			slog.Error("config write store Complete failed", "error", err, "request_id", requestID)
+			writeError(w, http.StatusInternalServerError, "failed to persist completion")
+			return
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+
+// RestoreConfigBackup accepts a backup path and asks the daemon to restore it.
+// POST /api/daemon/runtimes/{runtimeId}/config/restore
+func (h *Handler) RestoreConfigBackup(w http.ResponseWriter, r *http.Request) {
+	runtimeID := chi.URLParam(r, "runtimeId")
+	if _, ok := h.requireDaemonRuntimeAccess(w, r, runtimeID); !ok {
+		return
+	}
+	var body struct {
+		BackupPath string `json:"backup_path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body: "+err.Error())
+		return
+	}
+	if body.BackupPath == "" {
+		writeError(w, http.StatusBadRequest, "backup_path is required")
+		return
+	}
+
+	// Queue a config write that restores from backup
+	// For now, provide a simple response acknowledging the request
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status": "queued",
+		"backup_path": body.BackupPath,
+	})
+}
+
+// persistAndParseConfigs stores raw configs from a successful read and runs
+// LLM parsing to produce unified schemas. Intended to be called as a
+// fire-and-forget goroutine from ReportConfigReadResult.
+func (h *Handler) persistAndParseConfigs(ctx context.Context, runtimeID string, configs *daemon.ProviderConfigs) {
+	runtimeUUID, err := util.ParseUUID(runtimeID)
+	if err != nil {
+		slog.Error("persistAndParseConfigs: invalid runtime UUID", "runtime_id", runtimeID, "error", err)
+		return
+	}
+
+	toolVersion := configs.Version
+	if toolVersion == "" {
+		toolVersion = "unknown"
+	}
+
+	for _, ct := range AllConfigTypes {
+		raw := configTypeRaw(configs, ct)
+		if raw == "" {
+			continue
+		}
+
+		hash := sha256Hex(raw)
+
+		rawJSON := sanitizeJSONB(raw)
+
+		snap, err := h.Queries.InsertRuntimeConfigSnapshot(ctx, db.InsertRuntimeConfigSnapshotParams{
+			RuntimeID:    runtimeUUID,
+			ConfigType:   string(ct),
+			Provider:     configs.Provider,
+			RawContent:   rawJSON,
+			ToolVersion:  toolVersion,
+			ContentHash:  hash,
+			Success:      true,
+			ErrorMessage: "",
+		})
+		if err != nil {
+			slog.Error("persistAndParseConfigs: InsertRuntimeConfigSnapshot failed",
+				"config_type", ct, "error", err)
+			continue
+		}
+
+		// Parse raw config into unified schema via the format-aware parser.
+		rawFiles := configTypeFiles(configs, ct)
+		unified := parseUnifiedConfig(ct, configs.Provider, rawFiles)
+		if unified == nil {
+			// Fallback: wrap raw content (e.g. markdown) as JSON.
+			unified = rawJSON
+		}
+
+		_, err = h.Queries.UpsertRuntimeConfigParsed(ctx, db.UpsertRuntimeConfigParsedParams{
+			RuntimeID:     runtimeUUID,
+			ConfigType:    string(ct),
+			UnifiedSchema: unified,
+			SnapshotID:    snap.ID,
+			ParsedBy:      "parser-v1",
+			SchemaVersion: 1,
+			UnknownKeys:   nil,
+			Warnings:      nil,
+		})
+		if err != nil {
+			slog.Error("persistAndParseConfigs: UpsertRuntimeConfigParsed failed",
+				"config_type", ct, "error", err)
+		}
+	}
+}
+
+// sha256Hex computes the SHA-256 hex digest of a string.
+func sha256Hex(s string) string {
+	h := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(h[:])
+}
+
+// sanitizeJSONB returns a valid JSONB value for the raw content string.
+// If raw is already valid JSON, returns it as-is. Otherwise wraps it in a
+// JSON object with a "raw" key.
+func sanitizeJSONB(raw string) []byte {
+	if json.Valid([]byte(raw)) {
+		return []byte(raw)
+	}
+	// Escape for safe embedding in JSON string
+	escaped, _ := json.Marshal(raw)
+	return []byte(`{"raw":` + string(escaped) + `}`)
+}

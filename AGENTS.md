@@ -8,6 +8,10 @@ This file provides guidance to AI agents when working with code in this reposito
 
 ## Quick Reference
 
+### Runtime Configuration Management
+
+Full config lifecycle (Skills, MCP, Hooks, Permissions, Memory, Rules, Instructions) for Claude Code, Codex, OpenCode, and Hermes runtimes. Supports visual management, diff comparison, and cross-machine migration. See CLAUDE.md for architecture details and key files.
+
 ### Architecture
 
 Go backend + monorepo frontend (pnpm workspaces + Turborepo) with shared packages.

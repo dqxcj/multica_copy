@@ -26,6 +26,8 @@ export interface RuntimeDevice {
   owner_id: string | null;
   /** Defaults to "private" when the backend predates the visibility flag. */
   visibility: RuntimeVisibility;
+  /** User-settable display label. */
+  label: string;
   last_seen_at: string | null;
   created_at: string;
   updated_at: string;
@@ -563,4 +565,50 @@ export interface RuntimeLocalSkillsResult {
 
 export interface RuntimeLocalSkillImportResult {
   skill: Skill;
+}
+
+// ---------------------------------------------------------------------------
+// Runtime config (provider-level configs for skills, MCP, hooks, permissions,
+// memory, rules, instructions).
+// ---------------------------------------------------------------------------
+
+export type RuntimeConfigType = "skills" | "mcp" | "hooks" | "permissions" | "memory" | "rules" | "instructions";
+
+export interface RuntimeConfigFile {
+  path: string;
+  content: string;
+  file_type: string;
+}
+
+export interface ProviderConfigs {
+  provider: string;
+  version: string;
+  supported: boolean;
+  skills: RuntimeConfigFile[];
+  mcp: RuntimeConfigFile | null;
+  hooks: RuntimeConfigFile | null;
+  permissions: RuntimeConfigFile | null;
+  memory: RuntimeConfigFile[];
+  rules: RuntimeConfigFile[];
+  instructions: RuntimeConfigFile[];
+}
+
+export interface RuntimeConfigReadRequest {
+  id: string;
+  runtime_id: string;
+  provider: string;
+  status: "pending" | "running" | "completed" | "failed" | "timeout";
+  configs?: ProviderConfigs;
+  error?: string;
+}
+
+export interface RuntimeConfigParsed {
+  id: string;
+  runtime_id: string;
+  config_type: RuntimeConfigType;
+  unified_schema: Record<string, unknown>;
+  snapshot_id: string | null;
+  schema_version: number;
+  unknown_keys: string[];
+  warnings: string[];
 }

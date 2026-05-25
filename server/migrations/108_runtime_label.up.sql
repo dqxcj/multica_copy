@@ -1,0 +1,1 @@
+ALTER TABLE agent_runtime ADD COLUMN label TEXT NOT NULL DEFAULT '';

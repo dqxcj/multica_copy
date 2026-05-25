@@ -39,6 +39,12 @@ DO UPDATE SET
     updated_at = now()
 RETURNING *, (xmax = 0) AS inserted;
 
+-- name: UpdateAgentRuntimeLabel :one
+UPDATE agent_runtime
+SET label = @label, updated_at = now()
+WHERE id = @id
+RETURNING *;
+
 -- name: UpdateAgentRuntimeVisibility :one
 -- Toggles a runtime between 'private' (only owner can bind agents) and
 -- 'public' (any workspace member can). Default for new rows is 'private'
